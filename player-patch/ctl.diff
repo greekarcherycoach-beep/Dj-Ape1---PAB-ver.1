@@ -1,0 +1,114 @@
+--- /mnt/user-data/uploads/main.rs	2026-11-18 20:54:04.846446000 +0000
++++ main.rs	2026-11-18 20:57:22.944460606 +0000
+@@ -344,6 +344,7 @@
+                             }
+                         }
+                         "state" => {
++                            *st.status.lock().unwrap() = v["a"].clone();
+                             if let Some((t, toggle)) = &tray {
+                                 let a = &v["a"];
+                                 let playing = a["playing"].as_bool().unwrap_or(false);
+--- /mnt/user-data/uploads/state.rs	2026-11-18 20:54:04.914630000 +0000
++++ state.rs	2026-11-18 20:57:22.944288795 +0000
+@@ -66,6 +66,8 @@
+     results: Mutex<HashMap<u64, Vec<u8>>>,
+     /// (len, mtime) of a library.json we already validated (our own atomic saves) – skips re-parsing on load
+     valid_main: Mutex<Option<(u64, SystemTime)>>,
++    /// latest player state pushed by the UI (used by the local control API)
++    pub status: Mutex<Value>,
+ }
+ 
+ pub fn mtime_ms(m: &fs::Metadata) -> u64 {
+@@ -110,9 +112,23 @@
+             lib_lock: Mutex::new(()),
+             results: Mutex::new(HashMap::new()),
+             valid_main: Mutex::new(None),
++            status: Mutex::new(Value::Null),
+         }
+     }
+ 
++    /// Control API token: the API is enabled ONLY if <data_dir>/control.token exists (>= 16 chars).
++    pub fn ctl_token(&self) -> Option<String> {
++        fs::read_to_string(self.data_dir.join("control.token"))
++            .ok()
++            .map(|s| s.trim().to_string())
++            .filter(|s| s.len() >= 16)
++    }
++    /// Sends a command object to the UI (window.__ctl.run). The value is serialised JSON, so it cannot inject code.
++    pub fn ctl_eval(&self, cmd: Value) {
++        let js = format!("window.__ctl&&window.__ctl.run({})", cmd);
++        let _ = self.proxy.lock().unwrap().send_event(UserEvent::Eval(js));
++    }
++
+     fn lib_path(&self) -> PathBuf {
+         self.data_dir.join("library.json")
+     }
+--- /mnt/user-data/uploads/server.rs	2026-11-18 20:54:04.637731000 +0000
++++ server.rs	2026-11-18 20:57:22.944622079 +0000
+@@ -92,6 +92,9 @@
+     if method == Method::Get && (path == "/" || path == "/index.html") {
+         return reply(rq, 200, "text/html; charset=utf-8", html.as_bytes().to_vec());
+     }
++    if path.starts_with("/api/") {
++        return ctl(st, rq, path, &method);
++    }
+     let tok = format!("/{}/", st.token);
+     let seg: Vec<&str> = path.trim_start_matches('/').splitn(3, '/').collect();
+     // seg = [kind, token, rest]
+@@ -294,3 +297,44 @@
+         _ => Err(format!("unknown method {method}")),
+     }
+ }
++
++/// Local control API for the Dj Ape1 Auto DJ engine. 127.0.0.1 only (Host check above) and
++/// enabled only when <data_dir>/control.token exists. Requires `Authorization: Bearer <token>`.
++///   GET  /api/status                       -> last state pushed by the UI
++///   POST /api/play|pause|stop|next|prev
++///   POST /api/playlist  {"name": "..."}    -> loads and starts the named playlist
++fn ctl(st: &AppState, mut rq: Request, path: &str, method: &Method) {
++    let want = match st.ctl_token() {
++        Some(t) => t,
++        None => return text(rq, 404, "not found"),
++    };
++    let expected = format!("Bearer {want}");
++    let ok = rq.headers().iter().any(|h| h.field.equiv("Authorization") && h.value.as_str() == expected);
++    if !ok {
++        return text(rq, 401, "unauthorized");
++    }
++    if path == "/api/status" && *method == Method::Get {
++        let v = st.status.lock().unwrap().clone();
++        return reply(rq, 200, "application/json", serde_json::to_vec(&v).unwrap_or_default());
++    }
++    if *method != Method::Post {
++        return text(rq, 404, "not found");
++    }
++    let mut body = Vec::new();
++    let _ = rq.as_reader().read_to_end(&mut body);
++    let arg: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
++    match path {
++        "/api/play" | "/api/pause" | "/api/stop" | "/api/next" | "/api/prev" => {
++            st.ctl_eval(json!({ "cmd": &path[5..] }));
++            reply(rq, 200, "application/json", b"{}".to_vec())
++        }
++        "/api/playlist" => match arg["name"].as_str() {
++            Some(n) if !n.is_empty() && n.len() < 200 => {
++                st.ctl_eval(json!({ "cmd": "playlist", "name": n }));
++                reply(rq, 200, "application/json", b"{}".to_vec())
++            }
++            _ => text(rq, 400, "missing name"),
++        },
++        _ => text(rq, 404, "not found"),
++    }
++}
+--- /mnt/user-data/uploads/index.html	2026-11-18 20:54:04.847310000 +0000
++++ index.html	2026-11-18 20:57:22.949930426 +0000
+@@ -1836,7 +1836,8 @@
+  const dk=window.desktop;
+  dk.onFullscreen(v=>{const b=$("appfs");if(b)b.textContent=v?"🗗":"⛶"});
+  dk.onCmd(c=>{if(c==="toggle"){if(cur)au.paused?au.play().catch(()=>{}):au.pause()}else if(c==="next")next();else if(c==="prev")prev();else if(c==="stop")au.pause();else if(c==="mini")miniOpen()});
+- const rp=()=>{try{dk.state({playing:!au.paused,title:cur&&cur.title||"",artist:cur&&cur.artist||""})}catch(e){}};["play","pause","ended","loadedmetadata"].forEach(ev=>au.addEventListener(ev,rp));
++ let plName="";const rp=()=>{try{dk.state({playing:!au.paused,state:au.paused?(cur?"paused":"stopped"):"playing",title:cur&&cur.title||"",artist:cur&&cur.artist||"",album:cur&&cur.album||"",genre:cur&&cur.genre||"",playlist:plName})}catch(e){}};
++ window.__ctl={run(o){try{const c=o&&o.cmd;if(c==="play"){if(cur)au.play().catch(()=>{})}else if(c==="pause"||c==="stop")au.pause();else if(c==="next")next();else if(c==="prev")prev();else if(c==="playlist"){const nm=String(o.name||"").trim().toLowerCase(),p=PL.find(x=>String(x.name).trim().toLowerCase()===nm);if(!p){plName="";rp();return}const m=new Map(T.map(t=>[tk(t),t])),list=p.smart?T.filter(t=>inPL(t,p)):p.items.map(k=>m.get(k)).filter(Boolean);plName=p.name;startQ(list,null);rp()}}catch(e){console.error(e)}}};["play","pause","ended","loadedmetadata"].forEach(ev=>au.addEventListener(ev,rp));
+  dk.onOpen(p=>openPaths(p,true));dk.getOpen().then(p=>{if(p&&p.length)openPaths(p,true)}).catch(()=>{});
+  dk.native.onChanged(()=>{checkNew(false,true)});
+  {const _rl=refreshLinks;refreshLinks=function(){_rl.apply(this,arguments);try{dk.native.watch(DIRS.filter(d=>d.handle&&d.handle.path).map(d=>d.handle.path))}catch(e){}}}

@@ -1,0 +1,42 @@
+<!doctype html><html lang="el"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/assets/icon.png"><title>Dj Ape1 – Host</title><style>
+:root{--bg:#1a1a1d;--panel:#2b2b30;--purple:#9b5cff;--blue:#3db2ff;--amber:#ffb23d;--tx:#f2f2f2}
+body{margin:0;padding:16px;background:var(--bg);color:var(--tx);font-family:system-ui,sans-serif}
+.p{background:var(--panel);border:1px solid #444;border-radius:12px;padding:14px;margin-bottom:12px;overflow-x:auto}
+h3{margin:0 0 8px;color:var(--blue)}table{width:100%;border-collapse:collapse}td,th{padding:4px 8px;text-align:left;font-size:14px}
+input,button,select{padding:6px 10px;border-radius:6px;border:1px solid #555;background:#1f1f23;color:var(--tx);font:inherit}button{background:var(--purple);border:0;cursor:pointer}
+.led{color:var(--amber);font-weight:700}.err{color:#ff6b6b}.d label{margin-right:6px;white-space:nowrap}.f{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+</style></head><body><h2><img src="/assets/icon.png" alt="Dj Ape1" style="height:48px;vertical-align:middle;margin-right:8px">Host Panel <span class="led" id="cnt"></span></h2>
+<div class="p"><h3>Server</h3><span id="srv"></span></div>
+<div class="p"><h3>Player (Auto DJ)</h3><div id="pl"></div><button onclick="pc('prev')">⏮</button> <button onclick="pc('play')">▶</button> <button onclick="pc('pause')">⏸</button> <button onclick="pc('next')">⏭</button></div>
+<div class="p"><h3>Broadcast Schedule <span class="mu" id="stz"></span></h3>
+<div class="f"><input id="sn" placeholder="Όνομα εκπομπής"><input id="sg" placeholder="Είδος"><input id="sp" placeholder="Playlist του player"><input id="sd" placeholder="DJ"></div>
+<div class="f d" id="sdays"></div><div class="f">Από <input id="s1" type="time" value="20:00"> Έως <input id="s2" type="time" value="22:00"><input id="sde" placeholder="Περιγραφή" style="flex:1"><button onclick="addShow()">Προσθήκη</button></div><div id="serr" class="err"></div>
+<table id="shows"></table>
+<div class="f"><b>Παράκαμψη:</b><input id="on" placeholder="Όνομα έκτακτης" ><input id="op" placeholder="Playlist"><input id="om" type="number" value="30" style="width:70px"> λ. <button onclick="ovr()">Έναρξη</button><button onclick="api('override',{clear:true})">Επιστροφή στο πρόγραμμα</button>
+<button id="pz" onclick="pz()">Παύση προγράμματος</button></div></div>
+<div class="p"><h3>Listeners</h3><table id="ls"></table></div>
+<div class="p"><h3>Now playing (χειροκίνητα)</h3><input id="ar" placeholder="Artist"> <input id="ti" placeholder="Title"> <button onclick="meta()">Ενημέρωση</button></div>
+<div class="p"><h3>Access Codes</h3><input id="lb" placeholder="Περιγραφή"> <input id="mu" type="number" value="1" min="1" style="width:60px"> <button onclick="mk()">Νέος κωδικός</button>
+<div id="nc" class="led"></div><table id="cs"></table></div>
+<script>
+const T=localStorage.adm||(localStorage.adm=prompt('Admin token (data/admin.token)')),H={'x-admin-token':T,'Content-Type':'application/json'},DN=['Κυρ','Δευ','Τρί','Τετ','Πέμ','Παρ','Σάβ'];
+const $=i=>document.getElementById(i),esc=t=>String(t==null?'':t).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const api=(p,b,m)=>fetch('/api/'+p,{method:m||(b?'POST':'GET'),headers:H,body:b?JSON.stringify(b):undefined}).then(async r=>({st:r.status,...(await r.json().catch(()=>({})))}));
+$('sdays').innerHTML=[1,2,3,4,5,6,0].map(d=>`<label><input type="checkbox" value="${d}"> ${DN[d]}</label>`).join('');
+async function mk(){const r=await api('codes',{label:$('lb').value,maxUses:+$('mu').value});$('nc').textContent='Κωδικός (εμφανίζεται μία φορά): '+r.code;ref()}
+const meta=()=>api('meta',{artist:$('ar').value,title:$('ti').value}),pc=c=>api('player/cmd',{cmd:c});
+async function addShow(){const days=[...$('sdays').querySelectorAll('input:checked')].map(i=>+i.value);
+ const r=await api('schedule',{name:$('sn').value,genre:$('sg').value,playlist:$('sp').value,dj:$('sd').value,desc:$('sde').value,days,start:$('s1').value,end:$('s2').value});
+ $('serr').textContent=r.error?('⚠ '+r.error):'';ref()}
+const ovr=()=>api('override',{show:{name:$('on').value||'Έκτακτη εκπομπή',playlist:$('op').value},minutes:+$('om').value||30});
+let paused=false;const pz=async()=>{paused=!paused;await api('schedule/pause',{paused});$('pz').textContent=paused?'Συνέχιση προγράμματος':'Παύση προγράμματος'};
+async function ref(){const s=await api('status');if(s.error){localStorage.removeItem('adm');return}
+ $('cnt').textContent=`LIVE · ${s.connected} / ${s.max}`;$('srv').textContent=`uptime ${s.uptime}s · RAM ${s.rssMB} MB · encoders: ${JSON.stringify(s.encoders)}`;
+ $('ls').innerHTML='<tr><th>#<th>Όνομα<th>Ποιότητα<th>Backlog<th>Χρόνος<th></tr>'+s.listeners.map(l=>`<tr><td>${l.id}<td>${esc(l.name)}<td>${l.quality}<td>${l.backlog} B<td>${l.seconds}s<td><button onclick="api('kick',{id:${l.id}})">Kick</button></tr>`).join('');
+ $('cs').innerHTML=s.codes.map(c=>`<tr><td>${esc(c.label)}<td>max ${c.maxUses}<td>${c.revoked?'revoked':`<button onclick="api('revoke',{id:'${esc(c.id)}'})">Revoke</button>`}</tr>`).join('');
+ const sc=await api('schedule');$('stz').textContent=`(${sc.tz})`;
+ $('shows').innerHTML='<tr><th>Εκπομπή<th>Ημέρες<th>Ώρες<th>Playlist<th></tr>'+(sc.shows||[]).map(x=>`<tr${sc.current&&sc.current.id===x.id?' class="led"':''}><td>${esc(x.name)}${x.genre?' · '+esc(x.genre):''}<td>${(x.days||[]).map(d=>DN[d]).join(' ')||'—'}<td>${esc(x.start)}–${esc(x.end)}<td>${esc(x.playlist||'')}<td><button onclick="api('schedule?id=${encodeURIComponent(x.id)}',null,'DELETE').then(ref)">✕</button></tr>`).join('');
+ const p=await api('player');$('pl').textContent=p.connected?`● ${p.state||''} · ${[p.artist,p.title].filter(Boolean).join(' – ')} · playlist: ${p.playlist||'—'}`:'○ Player offline / ανενεργό'}
+ref();setInterval(ref,2000);
+</script></body></html>

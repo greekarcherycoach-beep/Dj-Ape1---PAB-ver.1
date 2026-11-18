@@ -1,0 +1,46 @@
+<!doctype html><html lang="el"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/assets/icon.png"><title>Dj Ape1 – Listener</title><style>
+:root{--bg:#1a1a1d;--panel:#2b2b30;--purple:#9b5cff;--blue:#3db2ff;--amber:#ffb23d;--tx:#f2f2f2;--mu:#a9a9b3}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,sans-serif;display:grid;place-items:start center;min-height:100vh;padding:12px}
+.card{background:var(--panel);border:1px solid #444;border-radius:16px;padding:18px;width:min(96vw,420px)}
+input,select,button{width:100%;margin:5px 0;padding:10px;border-radius:8px;border:1px solid #555;background:#1f1f23;color:var(--tx);font:inherit}
+button{background:var(--purple);border:0;font-weight:600;cursor:pointer}.tabs{display:flex;gap:6px;margin:10px 0}.tabs button{background:#1f1f23;border:1px solid #555;margin:0}.tabs .on{background:var(--purple)}
+.live{background:var(--amber);color:#000;border-radius:4px;padding:1px 6px;font-size:12px;font-weight:700;margin-left:6px}#st{color:var(--blue);min-height:1.4em;text-align:center}
+#m{text-align:center;min-height:1.4em;margin:6px 0}.mu{color:var(--mu);font-size:13px}.row{padding:8px 0;border-bottom:1px solid #3a3a40}.sec{margin:10px 0 4px;color:var(--blue);font-weight:700}
+.days{display:flex;gap:4px;flex-wrap:wrap}.days button{width:auto;flex:1;margin:0;padding:6px;background:#1f1f23;border:1px solid #555}.days .on{background:var(--purple)}.hide{display:none}
+</style></head><body><div class="card"><img src="/assets/logo.jpg" alt="Dj Ape1 Private Audio Broadcast" style="width:100%;border-radius:10px">
+<div id="st">Έτοιμο</div><div id="m"></div><div id="shownow" class="mu" style="text-align:center"></div>
+<div class="tabs"><button id="t1" class="on">LISTEN NOW</button><button id="t2">SCHEDULE</button></div>
+<div id="p1"><input id="code" placeholder="Access Code" autocomplete="off"><input id="name" placeholder="Όνομα (προαιρετικό)">
+<select id="q"><option value="mp3_320">MP3 320</option><option value="mp3_192">MP3 192</option><option value="flac">FLAC</option></select>
+<button id="b">▶ Play</button><input id="v" type="range" min="0" max="1" step="0.01" value="1" aria-label="Volume"><div id="qa" class="mu" style="text-align:center"></div></div>
+<div id="p2" class="hide"><div class="mu" id="clk"></div><div class="sec">NOW PLAYING SHOW</div><div id="g_now"></div><div class="sec">UP NEXT</div><div id="g_next"></div>
+<div class="days" id="dayb"></div><div id="g_week"></div></div><audio id="a"></audio></div>
+<script>
+const $=i=>document.getElementById(i),a=$('a'),DN=['Κυρ','Δευ','Τρί','Τετ','Πέμ','Παρ','Σάβ'];let es,retry=0,want=false,G=null,selDay=null;
+const esc=t=>String(t==null?'':t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function status(t){$('st').textContent=t}
+function go(){want=true;const p=new URLSearchParams({code:$('code').value,name:$('name').value,q:$('q').value});
+ status(retry?'Reconnecting…':'Connecting…');a.src='/stream?'+p+'&t='+Date.now();a.play().catch(()=>{});
+ if(es)es.close();es=new EventSource('/events?code='+encodeURIComponent($('code').value));
+ es.onmessage=e=>{const m=JSON.parse(e.data);$('m').textContent=[m.artist,m.title].filter(Boolean).join(' – ');$('shownow').textContent=m.show?'Εκπομπή: '+m.show:'';if(m.show)guide()}
+ guide()}
+a.onplaying=()=>{retry=0;status('Connected – Stable');$('qa').textContent='Ποιότητα: '+$('q').selectedOptions[0].text};a.onwaiting=()=>status('Buffering…');
+a.onerror=a.onended=()=>{if(!want)return;retry++;status(retry>3?'Access Denied / Host Offline':'Reconnecting…');setTimeout(()=>want&&go(),Math.min(1000*retry,8000))};
+$('b').onclick=()=>{if(want){want=false;a.pause();a.removeAttribute('src');a.load();if(es)es.close();$('b').textContent='▶ Play';status('Stopped')}else{go();$('b').textContent='⏸ Stop'}};
+$('v').oninput=e=>a.volume=e.target.value;
+function tab(n){$('p1').classList.toggle('hide',n!==1);$('p2').classList.toggle('hide',n!==2);$('t1').classList.toggle('on',n===1);$('t2').classList.toggle('on',n===2);if(n===2)guide()}
+$('t1').onclick=()=>tab(1);$('t2').onclick=()=>tab(2);
+const show=(s,live)=>`<div class="row"><b>${esc(s.name)}</b>${live?'<span class="live">LIVE</span>':''}<div class="mu">${esc(s.start)}–${esc(s.end)}${s.genre?' · '+esc(s.genre):''}${s.dj?' · DJ '+esc(s.dj):''}</div>${s.desc?'<div class="mu">'+esc(s.desc)+'</div>':''}</div>`;
+async function guide(){const c=$('code').value;if(!c){$('g_now').innerHTML='<div class="mu">Γράψε τον Access Code στην πρώτη καρτέλα.</div>';return}
+ try{const r=await fetch('/guide?code='+encodeURIComponent(c));if(!r.ok)throw 0;G=await r.json();render()}catch(e){$('g_now').innerHTML='<div class="mu">Δεν ήταν δυνατή η φόρτωση προγράμματος.</div>'}}
+function render(){if(!G)return;const n=G.now;if(selDay===null)selDay=n.day;
+ $('clk').textContent=`Ώρα σταθμού (${G.tz}): ${String(Math.floor(n.min/60)).padStart(2,'0')}:${String(n.min%60).padStart(2,'0')} · ${DN[n.day]}`;
+ $('g_now').innerHTML=G.nowShow?show(G.nowShow,true):'<div class="mu">Καμία προγραμματισμένη εκπομπή αυτή τη στιγμή.</div>';
+ if(G.next){const m=G.next.inMinutes;$('g_next').innerHTML=show(G.next.show)+`<div class="mu">σε ${m>=60?Math.floor(m/60)+' ώρ. ':''}${m%60} λ.</div>`}else $('g_next').innerHTML='<div class="mu">—</div>';
+ $('dayb').innerHTML=[1,2,3,4,5,6,0].map(d=>`<button data-d="${d}" class="${d===selDay?'on':''}">${DN[d]}</button>`).join('');
+ $('dayb').querySelectorAll('button').forEach(b=>b.onclick=()=>{selDay=+b.dataset.d;render()});
+ const L=G.week.filter(s=>(s.days&&s.days.includes(selDay))||(!s.days||!s.days.length)).sort((x,y)=>x.start.localeCompare(y.start));
+ $('g_week').innerHTML=L.map(s=>show(s,G.nowShow&&G.nowShow.id===s.id&&selDay===n.day)).join('')||'<div class="mu">Καμία εκπομπή.</div>'}
+setInterval(()=>{if(G&&!$('p2').classList.contains('hide'))guide()},30000);
+</script></body></html>
