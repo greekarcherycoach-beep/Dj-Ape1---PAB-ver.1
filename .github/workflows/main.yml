@@ -1,4 +1,4 @@
-name: Build
+name: Build (Windows)
 
 on:
   push:
@@ -15,51 +15,45 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: windows, os: windows-latest, bin: dj-ape1.exe }
-         
+  windows:
+    name: Build + installer
+    runs-on: windows-latest
+    permissions:
+      contents: write   # needed only for publishing a release on tags
     steps:
       - uses: actions/checkout@v4
 
-      - name: Linux dependencies
-        if: matrix.name == 'linux'
+      # The Cargo project may live in a sub-folder of the repo: find it.
+      - name: Locate project
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev libxdo-dev
+          $root = (Get-Location).Path
+          $toml = Get-ChildItem -Recurse -Filter Cargo.toml -File |
+                  Where-Object { $_.FullName -notmatch '\\(target|node_modules)\\' } |
+                  Where-Object { Select-String -Path $_.FullName -Pattern '^\s*name\s*=\s*"dj-ape1"' -Quiet } |
+                  Select-Object -First 1
+          if (-not $toml) { throw "Cargo.toml with name = ""dj-ape1"" not found in the repository" }
+          $iss = Get-ChildItem -Recurse -Filter djape1.iss -File | Select-Object -First 1
+          if (-not $iss) { throw "djape1.iss not found in the repository" }
+          $app = $toml.DirectoryName
+          "APP_DIR=$app" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "ISS_FILE=$($iss.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Project: $app"
+          Write-Host "Installer script: $($iss.FullName)"
+          if (-not (Test-Path (Join-Path $app "Cargo.lock"))) { Write-Warning "Cargo.lock is missing next to Cargo.toml (--locked will fail)" }
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.APP_DIR }}
 
       - name: Build (release)
+        working-directory: ${{ env.APP_DIR }}
         run: cargo build --release --locked
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: dj-ape1-${{ matrix.name }}
-          path: target/release/${{ matrix.bin }}
-          if-no-files-found: error
-
-  windows-installer:
-    name: Windows installer (Inno Setup)
-    needs: build
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: dj-ape1-windows
-          path: target/release
-
       - name: Resolve version
+        working-directory: ${{ env.APP_DIR }}
         shell: pwsh
         run: |
           if ("${{ github.ref }}" -like "refs/tags/v*") {
@@ -68,7 +62,7 @@ jobs:
             $m = Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
             $v = $m.Matches[0].Groups[1].Value + "-dev"
           }
-          "APP_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "APP_VERSION=$v" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Version: $v"
 
       - name: Ensure Inno Setup
@@ -81,35 +75,29 @@ jobs:
       - name: Build installer
         shell: pwsh
         run: |
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" installer\djape1.iss
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" $env:ISS_FILE
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Collect outputs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          $setup = Get-ChildItem -Recurse -Filter "DjApe1-Setup-*.exe" -File |
+                   Where-Object { $_.FullName -notmatch '\\target\\' } | Select-Object -First 1
+          if (-not $setup) { throw "Installer was not produced" }
+          Copy-Item $setup.FullName out\
+          Copy-Item (Join-Path $env:APP_DIR "target\release\dj-ape1.exe") out\dj-ape1-windows-x64.exe
+          Get-ChildItem out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dj-ape1-installer
-          path: dist/DjApe1-Setup-*.exe
+          name: dj-ape1-windows
+          path: out/*
           if-no-files-found: error
 
-  release:
-    name: Publish release
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, windows-installer]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
         with:
-          path: artifacts
-
-      - name: Prepare release files
-        run: |
-          mkdir release
-          cp artifacts/dj-ape1-installer/DjApe1-Setup-*.exe release/
-          cp artifacts/dj-ape1-windows/dj-ape1.exe release/dj-ape1-windows-x64.exe
-                    ls -la release
-
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: release/*
+          files: out/*
           generate_release_notes: true
