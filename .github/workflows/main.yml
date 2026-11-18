@@ -23,8 +23,7 @@ jobs:
       matrix:
         include:
           - { name: windows, os: windows-latest, bin: dj-ape1.exe }
-          - { name: linux,   os: ubuntu-latest,  bin: dj-ape1 }
-          - { name: macos,   os: macos-latest,   bin: dj-ape1 }
+         
     steps:
       - uses: actions/checkout@v4
 
@@ -108,9 +107,7 @@ jobs:
           mkdir release
           cp artifacts/dj-ape1-installer/DjApe1-Setup-*.exe release/
           cp artifacts/dj-ape1-windows/dj-ape1.exe release/dj-ape1-windows-x64.exe
-          tar -czf release/dj-ape1-linux-x64.tar.gz -C artifacts/dj-ape1-linux dj-ape1
-          tar -czf release/dj-ape1-macos.tar.gz -C artifacts/dj-ape1-macos dj-ape1
-          ls -la release
+                    ls -la release
 
       - uses: softprops/action-gh-release@v2
         with:
